@@ -863,6 +863,53 @@ function nearestMonster(){
   }
   return best;
 }
+// ── 移动攻击：锁定屏幕内的最近目标 ──────────────────────────────────────
+// 站定：保持原来的"转向最近怪"，方便远程点射（不变）。
+// 移动：只锁定镜头里能看见的最近目标，身体朝它、脚步方向不变 → 侧身跑/倒着跑也能打中。
+// 屏幕里一个目标都没有时，就朝移动方向（原来的手感）。
+const _projV = new THREE.Vector3();
+function onScreen(t){
+  // 用身体中心而不是脚底做投影，避免贴边的怪因为脚底出画而丢锁
+  _projV.set(t.g.position.x, t.g.position.y+1.1, t.g.position.z).project(camera);
+  return _projV.z>-1 && _projV.z<1 && Math.abs(_projV.x)<=1.02 && Math.abs(_projV.y)<=1.02;
+}
+function onScreenTarget(){
+  let best=null,bd=Infinity;
+  const consider=t=>{
+    if(!onScreen(t))return;
+    const d=t.g.position.distanceToSquared(player.position);
+    if(d<bd){bd=d;best=t;}
+  };
+  for(const m of monsters)if(m.alive)consider(m);
+  if(bossTargetable())consider(boss);
+  return best;
+}
+
+// 锁定准星：脚下一对旋转弧 + 头顶倒三角，只标出"我现在在打谁"
+const reticle = new THREE.Group(); reticle.visible=false; scene.add(reticle);
+const reticleSpin = new THREE.Group(); reticle.add(reticleSpin);
+const reticleMat = new THREE.MeshBasicMaterial({color:0x8ff0ff,transparent:true,opacity:.7,depthWrite:false,side:THREE.DoubleSide});
+const reticleArcGeo = new THREE.RingGeometry(.7,.79,44,1,0,Math.PI*.55);
+const reticleArcA = new THREE.Mesh(reticleArcGeo,reticleMat);
+reticleArcA.rotation.x=-Math.PI/2; reticleArcA.position.y=.06;
+const reticleArcB = new THREE.Mesh(reticleArcGeo,reticleMat);
+reticleArcB.rotation.set(-Math.PI/2,0,Math.PI); reticleArcB.position.y=.06;
+reticleSpin.add(reticleArcA,reticleArcB);
+const reticleTip = new THREE.Mesh(new THREE.ConeGeometry(.2,.46,4),reticleMat);
+reticleTip.rotation.x=Math.PI; reticleTip.position.y=2.05; reticle.add(reticleTip);
+let lockedAim = null;   // 当前锁定的目标（供调试查看）
+function updateReticle(t){
+  if(t&&t.alive===false)t=null;
+  lockedAim=t;
+  reticle.visible=!!t&&mode==='play';
+  if(!t)return;
+  reticle.position.set(t.g.position.x,0,t.g.position.z);
+  reticle.scale.setScalar(t.g.scale.x);          // 准星跟着目标体型放大
+  reticleSpin.rotation.y=elapsed*1.15;
+  reticleTip.position.y=2.05+.12*Math.sin(elapsed*4);
+  reticleMat.opacity=.62+.22*Math.abs(Math.sin(elapsed*3));
+}
+
 // 找离某只怪最近的回血怪（退避时的目的地）
 function nearestHealer(m){
   let best=null,bd=Infinity;
@@ -1066,7 +1113,7 @@ function turnTo(target,rate,dt){
 }
 
 // ── Watch Demo：固定镜头章节；复用真实攻击、护盾、Q/E 与碰撞逻辑 ──────
-const DEFAULT_HINT='WASD / 方向键移动 · 空格发射子弹 · Shift 无敌冲刺 · R 强化普攻 · Esc 返回菜单';
+const DEFAULT_HINT='WASD / 方向键移动 · 按住空格连射（跑动时自动锁定屏幕内最近的怪）· Shift 无敌冲刺 · R 强化普攻 · Esc 返回菜单';
 const DEMO_CLIPS=[
   {kind:'grunt',duration:2.5,text:'粉怪：靠近后追击并贴身撞击（1 血），保持距离。'},
   {kind:'shooter',duration:3,text:'橙怪：每秒发射红色子弹（1 血），横向移动躲避。'},
@@ -1210,26 +1257,34 @@ function frame(){requestAnimationFrame(frame);const dt=Math.min(clock.getDelta()
   if(mode==='play'){
     dx=(keys.has('KeyD')||keys.has('ArrowRight')?1:0)-(keys.has('KeyA')||keys.has('ArrowLeft')?1:0);
     dz=(keys.has('KeyS')||keys.has('ArrowDown')?1:0)-(keys.has('KeyW')||keys.has('ArrowUp')?1:0);
+    if(keys.has('Space'))attack();   // 按住空格连射：配合下面的锁定，可以边跑边打
   }else{
     const movement=updateDemo(dt);dx=movement.x;dz=movement.z;
   }
   const len=Math.hypot(dx,dz);
+  let aim=null;
   if(dashTimer>0){
     const step=Math.min(dt,dashTimer)*DASH.distance/DASH.duration;
     player.position.x=THREE.MathUtils.clamp(player.position.x+dashDirection.x*step,-21,21);
     player.position.z=THREE.MathUtils.clamp(player.position.z+dashDirection.z*step,-21,21);
     player.rotation.y=Math.atan2(dashDirection.x,dashDirection.z);
     // 本帧所有伤害结算完毕后再扣冲刺时间，保证最后一段位移仍无敌。
+    aim=mode==='play'?onScreenTarget():null;
   }else if(len>.01){
     dx/=len;dz/=len;
     player.position.x=THREE.MathUtils.clamp(player.position.x+dx*PLAYER_SPEED*dt,-21,21);
     player.position.z=THREE.MathUtils.clamp(player.position.z+dz*PLAYER_SPEED*dt,-21,21);
-    turnTo(Math.atan2(dx,dz),14,dt);
+    // 移动攻击：身体锁定屏幕内最近的怪，脚步照旧走 dx/dz，形成侧身/倒走射击
+    aim=mode==='play'?onScreenTarget():null;
+    if(aim)turnTo(Math.atan2(aim.g.position.x-player.position.x,aim.g.position.z-player.position.z),16,dt);
+    else turnTo(Math.atan2(dx,dz),14,dt);
   }else{
     // 站桩时自动朝最近的怪，远程点射不会打偏
     const t=nearestMonster();
+    aim=t;
     if(t)turnTo(Math.atan2(t.g.position.x-player.position.x,t.g.position.z-player.position.z),10,dt);
   }
+  updateReticle(aim);
 
   for(const m of monsters){
     if(!m.alive)continue;
@@ -1388,6 +1443,7 @@ function frame(){requestAnimationFrame(frame);const dt=Math.min(clock.getDelta()
   updateDmgLabels(dt);
   dashTimer=Math.max(0,dashTimer-dt);
  }
+ if(mode!=='play')reticle.visible=false;   // 菜单/演示里不留准星
  player.scale.setScalar((attackFlash>0?1.13:1)*PLAYER_SCALE);player.visible=invuln<=0||Math.floor(invuln*10)%2===0;
  camera.position.lerp(new THREE.Vector3(player.position.x,player.position.y+9,player.position.z+11),.07);camera.lookAt(player.position.x,.85,player.position.z-2);renderer.render(scene,camera);
 }frame();
