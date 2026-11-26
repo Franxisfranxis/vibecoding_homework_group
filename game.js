@@ -836,7 +836,7 @@ function endNova(m){ clearNova(m); m.novaCD=NOVA.cooldown; }
 
 const MAX_HP = 5;
 const DASH = { distance:3, duration:.18, cooldown:8, maxCharges:2 };
-const ATTACK_BOOST = { duration:6, multiplier:2, spread:Math.PI/15, cooldown:20 };
+const ATTACK_BOOST = { duration:6, multiplier:2, spread:Math.PI/30, cooldown:20 };
 let dashCharges=1,dashTimer=0,dashRecharge=8,boostCooldown=0,boostTimer=0;
 const dashDirection=new THREE.Vector3();
 let healCharges=0,laserUnlocked=false,laserCharges=0,laserCooldown=0;
@@ -931,7 +931,7 @@ function attack(){
   for(let i=0;i<offsets.length;i++){
     const angle=player.rotation.y+offsets[i];
     const shotDir=new THREE.Vector3(Math.sin(angle),0,Math.cos(angle));
-    // 三颗子弹横向并排出膛，左右两颗分别向外偏转 12 度，形成扇形。
+    // 三颗子弹横向并排出膛，左右两颗分别向外偏转 6 度，形成扇形。
     const shotFrom=from.clone().addScaledVector(right,boosted?(i-1)*.22:0);
     spawnBullet(shotFrom,shotDir,20,playerBulletMat,bullets,1.4,boosted?ATTACK_BOOST.multiplier:1,true);
   }
