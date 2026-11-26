@@ -262,6 +262,7 @@ function hitBoss(dmg){
     dmg*=.25; // 破盾这一击仍按命中前护盾结算，之后的攻击恢复原伤害。
   }
   boss.hp-=dmg;boss.hitFlash=.14;
+  creditHit(Math.max(0,dmg)*10);
   tone(300,.05);
   if(boss.hp<=1e-6){boss.hp=0;killBoss();}
   else if(!boss.phaseTwo&&boss.hp<=boss.maxHp/2)startBossPhaseTwo();
@@ -277,7 +278,7 @@ function killBoss(){
   }
   boss.hp=0;refreshBossBar();updateHud();
   tone(980,.7);
-  setTimeout(()=>{if(mode==='play')menu('草原恢复和平！','你击碎了门口的魔王，奶娃守护了阳光草原！');},800);
+  setTimeout(()=>{if(mode==='play')menu('草原恢复和平！',`你击碎了门口的魔王，奶娃守护了阳光草原！本局得分 ${score}，最高连击 ×${bestCombo}。`);},800);
 }
 
 // ── BOSS 技能一：三段弹幕（每段数量都不同）──────────────────────────────
@@ -841,9 +842,43 @@ let dashCharges=1,dashTimer=0,dashRecharge=8,boostCooldown=0,boostTimer=0;
 const dashDirection=new THREE.Vector3();
 let healCharges=0,laserUnlocked=false,laserCharges=0,laserCooldown=0;
 let mode='menu',hp=MAX_HP,kills=0,invuln=0,attackCooldown=0,attackFlash=0,demoTime=0,muted=false,audio=null;const keys=new Set();
+
+// ── 连击与得分 ────────────────────────────────────────────────────────────
+// 每次命中累计 1 连击，3 秒内没有新命中或玩家受伤就清零。
+// 得分 = 实际伤害 × 10 × 连击倍率，倍率每层 +0.1，最高 2.0 倍。
+const COMBO = { window:3, step:.1, maxMult:2 };
+let combo=0,comboTimer=0,bestCombo=0,score=0;
+function comboMult(){return Math.min(COMBO.maxMult,1+(Math.max(1,combo)-1)*COMBO.step);}
+function creditHit(base){
+  if(mode!=='play')return;
+  combo++;comboTimer=COMBO.window;
+  if(combo>bestCombo)bestCombo=combo;
+  score+=Math.round(base*comboMult());
+  updateHud();pulseCombo();
+}
+function addScore(base){
+  if(mode!=='play')return 0;
+  const gain=Math.round(base*comboMult());
+  score+=gain;updateHud();return gain;
+}
+function pulseCombo(){
+  const el=$('combo');if(!el)return;
+  el.classList.remove('pulse');void el.offsetWidth;el.classList.add('pulse');
+}
 function tone(freq=440,duration=.12){if(muted)return;try{audio ||= new AudioContext();if(audio.state==='suspended')audio.resume();const o=audio.createOscillator(),g=audio.createGain();o.type='sine';o.frequency.value=freq;g.gain.setValueAtTime(.09,audio.currentTime);g.gain.exponentialRampToValueAtTime(.001,audio.currentTime+duration);o.connect(g).connect(audio.destination);o.start();o.stop(audio.currentTime+duration);}catch{}}
-function updateHud(){$('newSkills').textContent=`Shift 冲刺：${dashCharges}/${DASH.maxCharges} 次 · ${dashCharges<DASH.maxCharges?`${Math.ceil(dashRecharge)} 秒恢复`:'已存满'} · R 强化普攻：${boostTimer>0?`强化中 ${Math.ceil(boostTimer)} 秒 · `:''}${boostCooldown>0?`冷却 ${Math.ceil(boostCooldown)} 秒`:'就绪'}`;$('skills').textContent=`Q 回血：${healCharges} 次 · E 激光：${!laserUnlocked?'Boss 战解锁':laserCharges===0?'次数已用完':`${laserCharges} 次 · ${laserCooldown>0?`冷却 ${Math.ceil(laserCooldown)} 秒`:'就绪'}`}`;$('health').textContent='❤️'.repeat(Math.max(0,hp))+'🤍'.repeat(Math.max(0,MAX_HP-hp));$('progress').textContent=boss.active?`👹 BOSS ${Math.ceil(Math.max(0,boss.hp))} / ${boss.maxHp}${boss.phaseTwo?` · 🛡 ${boss.shieldHp.toFixed(1)} / 35`:''}`:`👾 ${kills} / ${monsters.length}`;}
-function reset(){dashCharges=1;dashTimer=0;dashRecharge=DASH.cooldown;boostCooldown=0;boostTimer=0;dashDirection.set(0,0,0);healCharges=0;laserUnlocked=false;laserCharges=0;laserCooldown=0;clearSkillEffects();boss.phaseTwo=false;boss.shieldHp=35;boss.jumpCount=0;boss.jumpFrom=null;boss.jumpTarget=null;boss.g.position.set(0,0,BOSS.z);boss.shield.material.color.setHex(0x9ad8ff);boss.shield.material.opacity=.18;player.position.set(0,0,10);player.rotation.y=Math.PI;hp=MAX_HP;kills=0;invuln=0;attackCooldown=0;attackFlash=0;demoTime=0;keys.clear();clearBullets();clearDmgLabels();clearBossBeams();clearBossNovas();clearHomings();monsters.forEach((m,i)=>{clearLaser(m);clearNova(m);m.alive=true;m.g.visible=true;m.g.position.set(monsterPositions[i][0],0,monsterPositions[i][1]);m.hp=m.maxHp;m.aiState='idle';m.chaseTimer=0;m.restTimer=0;m.hitFlash=0;m.fireTimer=.5+random()*.6;m.laserCD=1.2+random()*.8;m.laserTimer=0;m.hellState='idle';m.hellCD=1.5+random()*1.0;m.hellTimer=0;m.novaCD=1.8+random()*1.0;m.novaTimer=0;if(m.core)m.core.scale.setScalar(1);if(m.aura){m.aura.visible=true;m.aura.position.set(monsterPositions[i][0],.04,monsterPositions[i][1]);m.aura.material.opacity=.2;}if(m.healLines)for(const l of m.healLines)l.visible=false;m.bodyMat.emissiveIntensity=0;refreshBar(m);});boss.hp=boss.maxHp;boss.active=false;boss.alive=false;boss.dead=false;boss.state='dormant';boss.timer=0;boss.skill=null;boss.step=0;boss.lastSkill=null;boss.roar=0;boss.hitFlash=0;boss.shieldPulse=0;boss.g.visible=true;boss.g.rotation.y=0;boss.shield.visible=true;boss.shield.scale.setScalar(1);boss.bodyMat.color.setHex(0x4b5563);boss.bodyMat.emissiveIntensity=0;refreshBossBar();updateHud();}
+function updateHud(){$('newSkills').textContent=`Shift 冲刺：${dashCharges}/${DASH.maxCharges} 次 · ${dashCharges<DASH.maxCharges?`${Math.ceil(dashRecharge)} 秒恢复`:'已存满'} · R 强化普攻：${boostTimer>0?`强化中 ${Math.ceil(boostTimer)} 秒 · `:''}${boostCooldown>0?`冷却 ${Math.ceil(boostCooldown)} 秒`:'就绪'}`;$('skills').textContent=`Q 回血：${healCharges} 次 · E 激光：${!laserUnlocked?'Boss 战解锁':laserCharges===0?'次数已用完':`${laserCharges} 次 · ${laserCooldown>0?`冷却 ${Math.ceil(laserCooldown)} 秒`:'就绪'}`}`;$('health').textContent='❤️'.repeat(Math.max(0,hp))+'🤍'.repeat(Math.max(0,MAX_HP-hp));$('progress').textContent=boss.active?`👹 BOSS ${Math.ceil(Math.max(0,boss.hp))} / ${boss.maxHp}${boss.phaseTwo?` · 🛡 ${boss.shieldHp.toFixed(1)} / 35`:''}`:`👾 ${kills} / ${monsters.length}`;
+  // 连击：≥2 才出现，附带剩余窗口条；得分常驻右上角
+  const comboWrap=$('comboWrap');
+  if(comboWrap){
+    comboWrap.classList.toggle('show',combo>=2);
+    if(combo>=2){
+      $('combo').textContent=`🔥 ${combo} 连击 ×${comboMult().toFixed(1)}`;
+      $('comboBar').style.setProperty('--w',`${Math.max(0,comboTimer/COMBO.window*100)}%`);
+    }
+  }
+  $('score').textContent=`🏆 ${score}`;
+}
+function reset(){combo=0;comboTimer=0;bestCombo=0;score=0;dashCharges=1;dashTimer=0;dashRecharge=DASH.cooldown;boostCooldown=0;boostTimer=0;dashDirection.set(0,0,0);healCharges=0;laserUnlocked=false;laserCharges=0;laserCooldown=0;clearSkillEffects();boss.phaseTwo=false;boss.shieldHp=35;boss.jumpCount=0;boss.jumpFrom=null;boss.jumpTarget=null;boss.g.position.set(0,0,BOSS.z);boss.shield.material.color.setHex(0x9ad8ff);boss.shield.material.opacity=.18;player.position.set(0,0,10);player.rotation.y=Math.PI;hp=MAX_HP;kills=0;invuln=0;attackCooldown=0;attackFlash=0;demoTime=0;keys.clear();clearBullets();clearDmgLabels();clearBossBeams();clearBossNovas();clearHomings();monsters.forEach((m,i)=>{clearLaser(m);clearNova(m);m.alive=true;m.g.visible=true;m.g.position.set(monsterPositions[i][0],0,monsterPositions[i][1]);m.hp=m.maxHp;m.aiState='idle';m.chaseTimer=0;m.restTimer=0;m.hitFlash=0;m.fireTimer=.5+random()*.6;m.laserCD=1.2+random()*.8;m.laserTimer=0;m.hellState='idle';m.hellCD=1.5+random()*1.0;m.hellTimer=0;m.novaCD=1.8+random()*1.0;m.novaTimer=0;if(m.core)m.core.scale.setScalar(1);if(m.aura){m.aura.visible=true;m.aura.position.set(monsterPositions[i][0],.04,monsterPositions[i][1]);m.aura.material.opacity=.2;}if(m.healLines)for(const l of m.healLines)l.visible=false;m.bodyMat.emissiveIntensity=0;refreshBar(m);});boss.hp=boss.maxHp;boss.active=false;boss.alive=false;boss.dead=false;boss.state='dormant';boss.timer=0;boss.skill=null;boss.step=0;boss.lastSkill=null;boss.roar=0;boss.hitFlash=0;boss.shieldPulse=0;boss.g.visible=true;boss.g.rotation.y=0;boss.shield.visible=true;boss.shield.scale.setScalar(1);boss.bodyMat.color.setHex(0x4b5563);boss.bodyMat.emissiveIntensity=0;refreshBossBar();updateHud();}
 function begin(isDemo){reset();demoIndex=-1;demoClipTime=0;demoEvents.clear();mode=isDemo?'demo':'play';$('overlay').hidden=true;$('demoLabel').hidden=!isDemo;tone(620,.2);}
 function menu(title='奶娃的草原大冒险',message='守护阳光草原！操控奶娃用子弹打败 23 只捣蛋怪，再打碎门口的魔王！'){mode='menu';clearSkillEffects();clearBullets();clearDmgLabels();clearBossBeams();clearBossNovas();clearHomings();monsters.forEach(m=>{clearLaser(m);clearNova(m);});$('title').textContent=title;$('message').textContent=message;$('overlay').hidden=false;$('demoLabel').hidden=true;$('hint').textContent=DEFAULT_HINT;keys.clear();}
 
@@ -994,13 +1029,14 @@ function enemyShoot(m){
 }
 function damage(m,dmg){
   m.hp-=dmg;m.hitFlash=.16;
+  creditHit(Math.max(0,dmg)*10);   // 命中即累计连击与得分（伤害按衰减后的浮点值结算）
   if(m.hp<=1e-6)killMonster(m);   // 浮点误差兜底
   else{refreshBar(m);tone(320,.05);}
 }
 function killMonster(m){
   if(!m.alive)return;
   if(m.kind==='healer')healCharges++;
-  m.alive=false;m.g.visible=false;if(m.aura)m.aura.visible=false;if(m.healLines)for(const l of m.healLines)l.visible=false;kills++;clearLaser(m);clearNova(m);tone(760,.16);
+  m.alive=false;m.g.visible=false;if(m.aura)m.aura.visible=false;if(m.healLines)for(const l of m.healLines)l.visible=false;kills++;addScore(50);clearLaser(m);clearNova(m);tone(760,.16);
   // 冲刺充能与原有回血独立结算，满血时也能获得次数。
   dashCharges=Math.min(DASH.maxCharges,dashCharges+1);
   if(dashCharges===DASH.maxCharges)dashRecharge=0;
@@ -1012,8 +1048,8 @@ function killMonster(m){
 }
 function hurtPlayer(amount=1){
   if(mode!=='play'||invuln>0||dashTimer>0)return;   // 无敌帧内不再叠加伤害，避免被弹幕/光圈连续秒掉
-  hp=Math.max(0,hp-amount);invuln=1.5;tone(160,.3);updateHud();
-  if(hp<=0)menu('再试一次吧！','奶娃需要休息一下，重新出发守护草原吧。');
+  hp=Math.max(0,hp-amount);invuln=1.5;tone(160,.3);combo=0;comboTimer=0;updateHud();   // 受伤打断连击
+  if(hp<=0)menu('再试一次吧！',`奶娃需要休息一下，重新出发守护草原吧。本局得分 ${score}，最高连击 ×${bestCombo}。`);
 }
 
 function updateBullets(dt){
@@ -1252,6 +1288,12 @@ function frame(){requestAnimationFrame(frame);const dt=Math.min(clock.getDelta()
     updateHud();
   }
   if(laserCooldown>0){laserCooldown=Math.max(0,laserCooldown-dt);updateHud();}
+  // 连击窗口倒计时：3 秒内没有新命中就断连
+  if(combo>0){
+    comboTimer=Math.max(0,comboTimer-dt);
+    if(comboTimer<=0){combo=0;updateHud();}
+    else $('comboBar').style.setProperty('--w',`${comboTimer/COMBO.window*100}%`);
+  }
   updateSkillEffects(dt);
   let dx=0,dz=0;
   if(mode==='play'){
